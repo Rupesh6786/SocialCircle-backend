@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken'); // Upgraded from jwt-simple to jsonwebtoken
+const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -48,7 +48,7 @@ const io = new Server(server, {
     }
 });
 
-// Optional: Socket Authentication Middleware
+// Socket Authentication Middleware
 io.use((socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization;
     if (!token) {
@@ -113,7 +113,7 @@ const authenticateToken = (req, res, next) => {
         if (err) {
             return res.status(403).json({ success: false, message: "Invalid or expired token" });
         }
-        req.user = decoded;
+        req.user = decoded; // Contains { id, email }
         next();
     });
 };
@@ -122,7 +122,6 @@ const authenticateToken = (req, res, next) => {
 
 // SIGNUP ENDPOINT
 app.post('/api/auth/signup', async (req, res) => {
-    // 1. Notice confirmPassword is removed here
     const { fullName, email, password } = req.body;
 
     if (!fullName || !email || !password) {
@@ -210,17 +209,32 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// GET CURRENT USER PROFILE (Protected Route Example)
+// GET PROFILE ENDPOINT (/api/auth/me)
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
-        const [rows] = await db.query("SELECT id, full_name, email, created_at FROM users WHERE id = ?", [req.user.id]);
+        // Query DB using user ID from decoded JWT
+        const [rows] = await db.query("SELECT id, full_name, email FROM users WHERE id = ?", [req.user.id]);
+
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "User not found" });
         }
-        res.status(200).json({ success: true, user: rows[0] });
-    } catch (err) {
-        console.error('Profile Fetch Error:', err);
-        res.status(500).json({ success: false, message: "Internal server error" });
+
+        const user = rows[0];
+
+        return res.status(200).json({
+            success: true,
+            user: {
+                id: user.id,
+                fullName: user.full_name,
+                email: user.email
+            }
+        });
+    } catch (error) {
+        console.error('Fetch Profile Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error: ' + error.message
+        });
     }
 });
 
