@@ -122,14 +122,11 @@ const authenticateToken = (req, res, next) => {
 
 // SIGNUP ENDPOINT
 app.post('/api/auth/signup', async (req, res) => {
-    const { fullName, email, password, confirmPassword } = req.body;
+    // 1. Notice confirmPassword is removed here
+    const { fullName, email, password } = req.body;
 
-    if (!fullName || !email || !password || !confirmPassword) {
+    if (!fullName || !email || !password) {
         return res.status(400).json({ success: false, message: "All fields are required" });
-    }
-
-    if (password !== confirmPassword) {
-        return res.status(400).json({ success: false, message: "Passwords do not match" });
     }
 
     if (password.length < 6) {
@@ -145,7 +142,7 @@ app.post('/api/auth/signup', async (req, res) => {
             return res.status(400).json({ success: false, message: "Email is already registered" });
         }
 
-        // Hash password with salt standard (10 rounds)
+        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Insert new user
