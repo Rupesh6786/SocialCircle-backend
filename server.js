@@ -9,17 +9,21 @@ const { Server } = require('socket.io');
 
 const app = express();
 const admin = require('firebase-admin');
+
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getMessaging } = require('firebase-admin/messaging');
 const serviceAccount = require('./serviceAccountKey.json');
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+// Initialize Firebase App
+initializeApp({
+    credential: cert(serviceAccount)
 });
 
 // Helper function to send FCM push notification
 async function sendPushNotification(token, title, body) {
     if (!token) return;
     try {
-        await admin.messaging().send({
+        await getMessaging().send({
             token: token,
             notification: { title, body },
             android: { priority: 'high' }
@@ -75,7 +79,7 @@ io.use((socket, next) => {
     if (!token) {
         return next(); // Proceed as guest or handle strict auth by returning new Error("Unauthorized")
     }
-    
+
     try {
         const cleanToken = token.replace('Bearer ', '');
         const decoded = jwt.verify(cleanToken, process.env.JWT_SECRET);
@@ -140,10 +144,10 @@ const authenticateToken = (req, res, next) => {
 };
 
 // --- 3. Auth Routes ---
-
 // SIGNUP ENDPOINT
 app.post('/api/auth/signup', async (req, res) => {
-    const { fullName, email, password } = req.body;
+    // 1. Accept optional fcmToken alongside fullName, email, and password
+    const { fullName, email, password, fcmToken } = req.body;
 
     if (!fullName || !email || !password) {
         return res.status(400).json({ success: false, message: "All fields are required" });
@@ -165,11 +169,20 @@ app.post('/api/auth/signup', async (req, res) => {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Insert new user
+        // 2. Insert new user with fcm_token
         const [result] = await db.query(
-            "INSERT INTO users (full_name, email, password) VALUES (?, ?, ?)",
-            [fullName.trim(), normalizedEmail, hashedPassword]
+            "INSERT INTO users (full_name, email, password, fcm_token) VALUES (?, ?, ?, ?)",
+            [fullName.trim(), normalizedEmail, hashedPassword, fcmToken || null]
         );
+
+        // 3. Send Welcome Push Notification if token is available
+        if (fcmToken) {
+            sendPushNotification(
+                fcmToken,
+                "Welcome to SafeCircle! 🎉",
+                `Hi ${fullName.trim()}, your account has been created successfully.`
+            );
+        }
 
         res.status(201).json({
             success: true,
@@ -185,7 +198,8 @@ app.post('/api/auth/signup', async (req, res) => {
 
 // LOGIN ENDPOINT
 app.post('/api/auth/login', async (req, res) => {
-    const { email, password } = req.body;
+    // 1. Accept optional fcmToken alongside email and password
+    const { email, password, fcmToken } = req.body;
 
     if (!email || !password) {
         return res.status(400).json({ success: false, message: "Email and password are required" });
@@ -194,7 +208,7 @@ app.post('/api/auth/login', async (req, res) => {
     try {
         const normalizedEmail = email.toLowerCase().trim();
         const [rows] = await db.query("SELECT * FROM users WHERE email = ?", [normalizedEmail]);
-        
+
         if (rows.length === 0) {
             return res.status(400).json({ success: false, message: "Invalid email or password" });
         }
@@ -206,12 +220,27 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid email or password" });
         }
 
-        // Sign JWT Token with explicit expiration (7 days)
+        // 2. Update user's FCM token in MySQL if provided from Android app
+        if (fcmToken) {
+            await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcmToken, user.id]);
+        }
+
+        // 3. Sign JWT Token with explicit expiration (7 days)
         const token = jwt.sign(
-            { id: user.id, email: user.email }, 
-            process.env.JWT_SECRET, 
+            { id: user.id, email: user.email },
+            process.env.JWT_SECRET,
             { expiresIn: '7d' }
         );
+
+        // 4. Send Instant Security Push Notification
+        const targetToken = fcmToken || user.fcm_token;
+        if (targetToken) {
+            sendPushNotification(
+                targetToken,
+                "New Login Alert 🔒",
+                `Your SafeCircle account was just logged in.`
+            );
+        }
 
         res.status(200).json({
             success: true,
@@ -273,6 +302,37 @@ app.post('/api/auth/fcm-token', authenticateToken, async (req, res) => {
     }
 });
 
+// POST /api/admin/send-notification
+app.post('/api/admin/send-notification', async (req, res) => {
+    const { targetType, userId, title, message } = req.body;
+    // targetType can be 'BROADCAST' or 'SINGLE_USER'
+
+    try {
+        if (targetType === 'BROADCAST') {
+            // Send to topic 'all_users'
+            await getMessaging().send({
+                topic: 'all_users',
+                notification: { title, body: message }
+            });
+            return res.json({ success: true, message: "Broadcast sent to all users" });
+
+        } else if (targetType === 'SINGLE_USER') {
+            // Fetch target user's FCM token from DB
+            const [rows] = await db.query("SELECT fcm_token FROM users WHERE id = ?", [userId]);
+            if (rows.length === 0 || !rows[0].fcm_token) {
+                return res.status(404).json({ success: false, message: "User FCM token not found" });
+            }
+
+            await sendPushNotification(rows[0].fcm_token, title, message);
+            return res.json({ success: true, message: `Notification sent to user ID ${userId}` });
+        }
+
+        res.status(400).json({ success: false, message: "Invalid targetType" });
+
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 // --- Server Startup ---
 const PORT = process.env.PORT || 5100;
