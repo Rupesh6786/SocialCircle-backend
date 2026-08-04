@@ -8,10 +8,12 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const app = express();
-const admin = require('firebase-admin');
 
+// --- Firebase Admin SDK Setup (Modular API) ---
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getMessaging } = require('firebase-admin/messaging');
+
+// Load service account key safely
 const serviceAccount = require('./serviceAccountKey.json');
 
 // Initialize Firebase App
@@ -28,7 +30,7 @@ async function sendPushNotification(token, title, body) {
             notification: { title, body },
             android: { priority: 'high' }
         });
-        console.log('✅ Push notification sent to token');
+        console.log('✅ Push notification sent successfully');
     } catch (err) {
         console.error('❌ Error sending push notification:', err.message);
     }
