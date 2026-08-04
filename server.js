@@ -8,6 +8,27 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const app = express();
+const admin = require('firebase-admin');
+const serviceAccount = require('./serviceAccountKey.json');
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+// Helper function to send FCM push notification
+async function sendPushNotification(token, title, body) {
+    if (!token) return;
+    try {
+        await admin.messaging().send({
+            token: token,
+            notification: { title, body },
+            android: { priority: 'high' }
+        });
+        console.log('✅ Push notification sent to token');
+    } catch (err) {
+        console.error('❌ Error sending push notification:', err.message);
+    }
+}
 
 // --- Express Middleware ---
 app.use(express.json());
@@ -237,6 +258,21 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         });
     }
 });
+
+app.post('/api/auth/fcm-token', authenticateToken, async (req, res) => {
+    const { fcmToken } = req.body;
+    if (!fcmToken) {
+        return res.status(400).json({ success: false, message: "FCM token required" });
+    }
+
+    try {
+        await db.query("UPDATE users SET fcm_token = ? WHERE id = ?", [fcmToken, req.user.id]);
+        res.status(200).json({ success: true, message: "FCM token updated successfully" });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 
 // --- Server Startup ---
 const PORT = process.env.PORT || 5100;
