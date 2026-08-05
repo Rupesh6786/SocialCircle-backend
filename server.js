@@ -273,8 +273,23 @@ app.post('/api/auth/login', async (req, res) => {
 // GET PROFILE ENDPOINT (/api/auth/me)
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
-        // Query DB using user ID from decoded JWT
-        const [rows] = await db.query("SELECT id, full_name, email FROM users WHERE id = ?", [req.user.id]);
+        // Query user info along with circle details via LEFT JOIN
+        const query = `
+            SELECT 
+                u.id, 
+                u.full_name, 
+                u.email,
+                c.id AS circle_id,
+                c.name AS circle_name,
+                c.invite_code
+            FROM users u
+            LEFT JOIN circle_members cm ON u.id = cm.user_id
+            LEFT JOIN circles c ON cm.circle_id = c.id
+            WHERE u.id = ?
+            LIMIT 1
+        `;
+
+        const [rows] = await db.query(query, [req.user.id]);
 
         if (rows.length === 0) {
             return res.status(404).json({ success: false, message: "User not found" });
@@ -282,12 +297,20 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
         const user = rows[0];
 
+        // Format circle object if user belongs to one
+        const circleData = user.circle_id ? {
+            id: user.circle_id,
+            name: user.circle_name,
+            inviteCode: user.invite_code
+        } : null;
+
         return res.status(200).json({
             success: true,
             user: {
                 id: user.id,
                 fullName: user.full_name,
-                email: user.email
+                email: user.email,
+                circle: circleData
             }
         });
     } catch (error) {
