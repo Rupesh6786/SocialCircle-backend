@@ -273,36 +273,45 @@ app.post('/api/auth/login', async (req, res) => {
 // GET PROFILE ENDPOINT (/api/auth/me)
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
-        // Query user info along with circle details via LEFT JOIN
-        const query = `
-            SELECT 
-                u.id, 
-                u.full_name, 
-                u.email,
-                c.id AS circle_id,
-                c.name AS circle_name,
-                c.invite_code
+        // 1. Get logged-in user details and their circle
+        const [userRows] = await db.query(`
+            SELECT u.id, u.full_name, u.email, c.id AS circle_id, c.name AS circle_name, c.invite_code
             FROM users u
             LEFT JOIN circle_members cm ON u.id = cm.user_id
             LEFT JOIN circles c ON cm.circle_id = c.id
             WHERE u.id = ?
             LIMIT 1
-        `;
+        `, [req.user.id]);
 
-        const [rows] = await db.query(query, [req.user.id]);
-
-        if (rows.length === 0) {
+        if (userRows.length === 0) {
             return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        const user = rows[0];
+        const user = userRows[0];
+        let circleData = null;
 
-        // Format circle object if user belongs to one
-        const circleData = user.circle_id ? {
-            id: user.circle_id,
-            name: user.circle_name,
-            inviteCode: user.invite_code
-        } : null;
+        // 2. Fetch all members if user belongs to a circle
+        if (user.circle_id) {
+            const [memberRows] = await db.query(`
+                SELECT u.id, u.full_name, u.email
+                FROM circle_members cm
+                JOIN users u ON cm.user_id = u.id
+                WHERE cm.circle_id = ?
+            `, [user.circle_id]);
+
+            circleData = {
+                id: user.circle_id,
+                name: user.circle_name,
+                inviteCode: user.invite_code,
+                members: memberRows.map(m => ({
+                    id: m.id,
+                    fullName: m.full_name,
+                    email: m.email,
+                    status: "Active",
+                    batteryLevel: 100
+                }))
+            };
+        }
 
         return res.status(200).json({
             success: true,
@@ -315,10 +324,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         });
     } catch (error) {
         console.error('Fetch Profile Error:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Server error: ' + error.message
-        });
+        return res.status(500).json({ success: false, message: 'Server error: ' + error.message });
     }
 });
 
