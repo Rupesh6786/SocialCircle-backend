@@ -36,6 +36,15 @@ async function sendPushNotification(token, title, body) {
     }
 }
 
+function generateInviteCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Excluded confusing characters like I, O, 1, 0
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `KIN-${result}`;
+}
+
 // --- Express Middleware ---
 app.use(express.json());
 app.use(cors({
@@ -335,6 +344,97 @@ app.post('/api/admin/send-notification', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+app.post('/api/circle/create', async (req, res) => {
+    const { userId, circleName } = req.body;
+
+    if (!userId || !circleName) {
+        return res.status(400).json({ success: false, message: 'User ID and Circle Name are required' });
+    }
+
+    const inviteCode = generateInviteCode();
+
+    try {
+        // Insert into circles table
+        const [circleResult] = await db.execute(
+            'INSERT INTO circles (name, invite_code, created_by) VALUES (?, ?, ?)',
+            [circleName, inviteCode, userId]
+        );
+
+        const circleId = circleResult.insertId;
+
+        // Add creator into circle_members table as admin
+        await db.execute(
+            'INSERT INTO circle_members (circle_id, user_id, role) VALUES (?, ?, ?)',
+            [circleId, userId, 'admin']
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Circle created successfully',
+            circle: {
+                id: circleId,
+                name: circleName,
+                inviteCode: inviteCode
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Failed to create circle' });
+    }
+});
+
+app.post('/api/circle/join', async (req, res) => {
+    const { userId, inviteCode } = req.body;
+
+    if (!userId || !inviteCode) {
+        return res.status(400).json({ success: false, message: 'User ID and Invite Code are required' });
+    }
+
+    try {
+        // Find circle by invite code
+        const [circles] = await db.execute(
+            'SELECT id, name, invite_code FROM circles WHERE invite_code = ?',
+            [inviteCode.trim().toUpperCase()]
+        );
+
+        if (circles.length === 0) {
+            return res.status(404).json({ success: false, message: 'Invalid Invite Code. Circle not found.' });
+        }
+
+        const circle = circles[0];
+
+        // Check if user is already a member
+        const [existing] = await db.execute(
+            'SELECT id FROM circle_members WHERE circle_id = ? AND user_id = ?',
+            [circle.id, userId]
+        );
+
+        if (existing.length > 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'You are already a member of this circle',
+                circle: circle
+            });
+        }
+
+        // Add user to circle_members
+        await db.execute(
+            'INSERT INTO circle_members (circle_id, user_id, role) VALUES (?, ?, ?)',
+            [circle.id, userId, 'member']
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Successfully joined circle',
+            circle: circle
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, message: 'Failed to join circle' });
+    }
+});
+
 
 // --- Server Startup ---
 const PORT = process.env.PORT || 5100;
