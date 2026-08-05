@@ -270,6 +270,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+
 // GET PROFILE ENDPOINT (/api/auth/me)
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
@@ -290,12 +291,23 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         const user = userRows[0];
         let circleData = null;
 
-        // 2. Fetch all members if user belongs to a circle
+        // 2. Fetch all members with dynamic states (Offline check after 5 mins inactivity)
         if (user.circle_id) {
             const [memberRows] = await db.query(`
-                SELECT u.id, u.full_name, u.email
+                SELECT 
+                    u.id, 
+                    u.full_name, 
+                    u.email,
+                    COALESCE(us.battery_level, 100) AS battery_level,
+                    COALESCE(us.speed, NULL) AS speed,
+                    CASE 
+                        WHEN us.updated_at IS NULL THEN 'Offline'
+                        WHEN TIMESTAMPDIFF(MINUTE, us.updated_at, NOW()) > 5 THEN 'Offline'
+                        ELSE COALESCE(us.status, 'Active')
+                    END AS current_status
                 FROM circle_members cm
                 JOIN users u ON cm.user_id = u.id
+                LEFT JOIN user_states us ON u.id = us.user_id
                 WHERE cm.circle_id = ?
             `, [user.circle_id]);
 
@@ -307,8 +319,9 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
                     id: m.id,
                     fullName: m.full_name,
                     email: m.email,
-                    status: "Active",
-                    batteryLevel: 100
+                    status: m.current_status,
+                    batteryLevel: m.battery_level,
+                    speed: m.speed
                 }))
             };
         }
@@ -327,6 +340,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         return res.status(500).json({ success: false, message: 'Server error: ' + error.message });
     }
 });
+
 
 app.post('/api/auth/fcm-token', authenticateToken, async (req, res) => {
     const { fcmToken } = req.body;
@@ -461,6 +475,31 @@ app.post('/api/circle/join', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Failed to join circle' });
+    }
+});
+
+// PUT /api/user/state - Update current user's battery and status
+app.put('/api/user/state', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { batteryLevel, status, speed } = req.body;
+
+        const query = `
+            INSERT INTO user_states (user_id, battery_level, status, speed, updated_at)
+            VALUES (?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE 
+                battery_level = VALUES(battery_level),
+                status = VALUES(status),
+                speed = VALUES(speed),
+                updated_at = NOW()
+        `;
+
+        await db.query(query, [userId, batteryLevel || 100, status || 'Active', speed || null]);
+
+        return res.status(200).json({ success: true, message: "State updated successfully" });
+    } catch (error) {
+        console.error('Update State Error:', error);
+        return res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
