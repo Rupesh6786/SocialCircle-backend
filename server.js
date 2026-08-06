@@ -341,6 +341,37 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
     }
 });
 
+// --- UPDATE PROFILE AVATAR ROUTE ---
+// PUT /api/user/profile/avatar
+app.put('/api/user/profile/avatar', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { profile_avatar } = req.body;
+
+        if (!profile_avatar) {
+            return res.status(400).json({ success: false, message: "Profile avatar string is required" });
+        }
+
+        // Update profile_avatar in users table
+        const [result] = await db.query(
+            "UPDATE users SET profile_avatar = ? WHERE id = ?",
+            [profile_avatar, userId]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Profile avatar updated successfully",
+            profile_avatar: profile_avatar
+        });
+    } catch (error) {
+        console.error('Update Avatar Error:', error);
+        return res.status(500).json({ success: false, message: "Server error: " + error.message });
+    }
+});
 
 app.post('/api/auth/fcm-token', authenticateToken, async (req, res) => {
     const { fcmToken } = req.body;
