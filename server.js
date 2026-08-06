@@ -274,9 +274,9 @@ app.post('/api/auth/login', async (req, res) => {
 // GET PROFILE ENDPOINT (/api/auth/me)
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
-        // 1. Get logged-in user details and their circle
+        // 1. Get logged-in user details and their circle (including profile_avatar)
         const [userRows] = await db.query(`
-            SELECT u.id, u.full_name, u.email, c.id AS circle_id, c.name AS circle_name, c.invite_code
+            SELECT u.id, u.full_name, u.email, u.profile_avatar, c.id AS circle_id, c.name AS circle_name, c.invite_code
             FROM users u
             LEFT JOIN circle_members cm ON u.id = cm.user_id
             LEFT JOIN circles c ON cm.circle_id = c.id
@@ -291,13 +291,14 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         const user = userRows[0];
         let circleData = null;
 
-        // 2. Fetch all members with dynamic states (Offline check after 5 mins inactivity)
+        // 2. Fetch all circle members with dynamic states and profile avatars
         if (user.circle_id) {
             const [memberRows] = await db.query(`
                 SELECT 
                     u.id, 
                     u.full_name, 
                     u.email,
+                    u.profile_avatar,
                     COALESCE(us.battery_level, 100) AS battery_level,
                     COALESCE(us.speed, NULL) AS speed,
                     CASE 
@@ -319,6 +320,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
                     id: m.id,
                     fullName: m.full_name,
                     email: m.email,
+                    profileAvatar: m.profile_avatar || null,
+                    profile_avatar: m.profile_avatar || null,
                     status: m.current_status,
                     batteryLevel: m.battery_level,
                     speed: m.speed
@@ -332,6 +335,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
                 id: user.id,
                 fullName: user.full_name,
                 email: user.email,
+                profile_avatar: user.profile_avatar || null,
+                profileAvatar: user.profile_avatar || null,
                 circle: circleData
             }
         });
